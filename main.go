@@ -22,7 +22,38 @@ var (
 	listOfVotingSystem []string
 )
 
-// init function to get vote_ids into global variable
+// struct for application
+type application struct {
+	infoLog *log.Logger
+	errLog  *log.Logger
+	DB      *sql.DB
+}
+
+// struct for response body
+type Response struct {
+	Message string `json:"message"`
+}
+
+// struct for results respose body
+type Result struct {
+	Results map[string]int `json:"results"`
+}
+
+// struct for casting vote
+type Vote struct {
+	VoteID string `json:"vote_id"`
+	Email  string `json:"email"`
+	Option string `json:"option"`
+}
+
+// struct for creating vote record
+type Voter struct {
+	VoterID  string   `json:"voter_id"`
+	Options  []string `json:"options"`
+	UserList []string `json:"user_list"`
+}
+
+// init function to initialize database and get existing vote_id into global variable
 func init() {
 	log.Println("init function start")
 	err := godotenv.Load()
@@ -73,47 +104,6 @@ func init() {
 	log.Println("init: closed")
 }
 
-// struct for application
-type application struct {
-	infoLog *log.Logger
-	errLog  *log.Logger
-	DB      *sql.DB
-}
-
-// struct for response body
-type Response struct {
-	Message string `json:"message"`
-}
-
-// struct for results respose body
-type Result struct {
-	Results map[string]int `json:"results"`
-}
-
-// struct for casting vote
-type Vote struct {
-	VoteID string `json:"vote_id"`
-	Email  string `json:"email"`
-	Option string `json:"option"`
-}
-
-// struct for creating vote record
-type Voter struct {
-	VoterID  string   `json:"voter_id"`
-	Options  []string `json:"options"`
-	UserList []string `json:"user_list"`
-}
-
-// Define routes
-func (app *application) routes() *http.ServeMux {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/create_vote", app.createVoterRecord)
-	mux.HandleFunc("/delete_all_voters", app.deleteAllVoters)
-	mux.HandleFunc("/vote", app.castVote)
-	mux.HandleFunc("/vote_result", app.getResult)
-	return mux
-}
-
 // remove duplicate from inputs
 func (app *application) removeDuplicates(list []string) []string {
 	seen := make(map[string]bool)
@@ -127,6 +117,16 @@ func (app *application) removeDuplicates(list []string) []string {
 	}
 	app.infoLog.Println("list after removing dupicates:", result)
 	return result
+}
+
+// Define routes
+func (app *application) routes() *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/create_vote", app.createVoterRecord)
+	mux.HandleFunc("/vote", app.castVote)
+	mux.HandleFunc("/vote_result", app.getResult)
+	mux.HandleFunc("/delete_all_voters", app.deleteAllVotingSystems)
+	return mux
 }
 
 // function to create voter record in DB and then send mail notification to user
@@ -205,14 +205,24 @@ func (app *application) createVoterRecord(w http.ResponseWriter, r *http.Request
 }
 
 // delete existing rows
-func (app *application) deleteAllVoters(w http.ResponseWriter, r *http.Request) {
+func (app *application) deleteAllVotingSystems(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodDelete {
 		http.Error(w, "Invalid request method", http.StatusMethodNotAllowed)
 		return
 	}
+	for _, table := range listOfVotingSystem {
+		go func(table string) {
+			stmt := fmt.Sprintf("drop table contx_%s;", table)
+			fmt.Println(stmt)
+			_, err := app.DB.Exec(stmt)
+			if err != nil {
+				log.Println(err.Error())
+			}
+		}(table)
+	}
+	listOfVotingSystem = []string{}
 
 	stmt := "DELETE FROM votersystem"
-
 	result, err := app.DB.Exec(stmt)
 	if err != nil {
 		app.errLog.Println("Error deleting data:", err.Error())
@@ -230,6 +240,7 @@ func (app *application) deleteAllVoters(w http.ResponseWriter, r *http.Request) 
 	w.Header().Set("Content-Type", "text/plain")
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(response))
+
 }
 
 // cast vote
@@ -407,6 +418,16 @@ func (app *application) getResult(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Database query error", http.StatusInternalServerError)
 		return
 	}
+	go func(voteID string) {
+		result := []string{}
+		for _, v := range listOfVotingSystem {
+			if v != voteID {
+				result = append(result, v)
+			}
+		}
+		listOfVotingSystem = result
+
+	}(voteID)
 	defer rows.Close()
 
 	results := make(map[string]int)
